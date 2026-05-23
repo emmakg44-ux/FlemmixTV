@@ -5,11 +5,13 @@ import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.drawable.BitmapDrawable;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 import android.net.http.SslError;
 import android.os.Bundle;
+import android.os.Handler;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
@@ -44,17 +46,21 @@ public class MainActivity extends Activity {
     private WebChromeClient.CustomViewCallback customViewCallback;
     private boolean isVideoFullscreen = false;
 
-    // Variables pour le curseur souris virtuel
+    // Curseur
     private int cursorX = 0;
     private int cursorY = 0;
-    private int screenWidth = 1920;  // valeurs par défaut, mises à jour au démarrage
+    private int screenWidth = 1920;
     private int screenHeight = 1080;
-    private boolean cursorVisible = true;
-    private static final int CURSOR_STEP = 20; // pixels par pression de touche
+    private static final int CURSOR_STEP = 25;      // déplacement par clic
+    private static final int SCROLL_EDGE = 80;      // zone près du bord (en pixels)
+    private static final int SCROLL_STEP = 40;      // pixels de défilement par frame
+    private Handler scrollHandler = new Handler();
+    private Runnable scrollRunnable;
+    private boolean isScrolling = false;
 
     private static final String TARGET_URL = "https://flemmix.win/";
 
-    // Blocage des pubs (même liste que précédemment)
+    // Blocage pubs
     private static final Set<String> AD_DOMAINS = new HashSet<>(Arrays.asList(
         "googlesyndication.com", "doubleclick.net", "googleadservices.com",
         "google-analytics.com", "googletagmanager.com", "googletagservices.com",
@@ -95,13 +101,11 @@ public class MainActivity extends Activity {
         rootLayout = findViewById(R.id.root_layout);
         customViewContainer = findViewById(R.id.custom_view_container);
 
-        // Création du curseur
-        createCursor();
+        createWhiteArrowCursor();  // curseur flèche blanche
 
         hideSystemUI();
         setupWebView();
 
-        // Récupérer les dimensions réelles de l'écran
         rootLayout.post(() -> {
             screenWidth = rootLayout.getWidth();
             screenHeight = rootLayout.getHeight();
@@ -115,26 +119,60 @@ public class MainActivity extends Activity {
         } else {
             showError("Pas de connexion internet.\nVérifie ton réseau et appuie sur OK pour réessayer.");
         }
+
+        // Runnable pour le défilement continu
+        scrollRunnable = new Runnable() {
+            @Override
+            public void run() {
+                if (!isScrolling) return;
+                int scrollY = 0;
+                if (cursorY <= SCROLL_EDGE) {
+                    scrollY = -SCROLL_STEP;
+                } else if (cursorY >= screenHeight - SCROLL_EDGE) {
+                    scrollY = SCROLL_STEP;
+                }
+                if (scrollY != 0) {
+                    webView.scrollBy(0, scrollY);
+                    scrollHandler.postDelayed(this, 30);
+                } else {
+                    isScrolling = false;
+                }
+            }
+        };
     }
 
-    private void createCursor() {
-        // Créer une petite image bitmap pour le curseur (un cercle rouge avec contour blanc)
-        int size = 40;
+    // Création d'un curseur flèche blanche (comme une souris classique)
+    private void createWhiteArrowCursor() {
+        int size = 48;
         Bitmap bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bmp);
+        canvas.drawColor(Color.TRANSPARENT);
+
         Paint paint = new Paint();
         paint.setAntiAlias(true);
-        paint.setColor(Color.RED);
-        canvas.drawCircle(size/2, size/2, size/2 - 2, paint);
         paint.setColor(Color.WHITE);
+        paint.setStyle(Paint.Style.FILL_AND_STROKE);
+        paint.setStrokeWidth(2);
+
+        // Dessiner une flèche orientée en haut à gauche (classique)
+        Path arrowPath = new Path();
+        arrowPath.moveTo(10, 10);      // pointe de la flèche
+        arrowPath.lineTo(size - 10, 10);
+        arrowPath.lineTo(size - 10, 28);
+        arrowPath.lineTo(size - 22, 28);
+        arrowPath.lineTo(size - 10, size - 10);
+        arrowPath.lineTo(size - 22, size - 10);
+        arrowPath.lineTo(size - 28, 28);
+        arrowPath.lineTo(10, 28);
+        arrowPath.close();
+
+        canvas.drawPath(arrowPath, paint);
+
+        // Ajouter un petit contour noir pour meilleure visibilité
+        paint.setColor(Color.BLACK);
         paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(2);
-        canvas.drawCircle(size/2, size/2, size/2 - 2, paint);
-        // petite croix au centre
-        paint.setColor(Color.WHITE);
-        paint.setStrokeWidth(2);
-        canvas.drawLine(size/2 - 6, size/2, size/2 + 6, size/2, paint);
-        canvas.drawLine(size/2, size/2 - 6, size/2, size/2 + 6, paint);
+        paint.setStrokeWidth(3);
+        canvas.drawPath(arrowPath, paint);
 
         cursorView = new ImageView(this);
         cursorView.setImageDrawable(new BitmapDrawable(getResources(), bmp));
@@ -147,24 +185,31 @@ public class MainActivity extends Activity {
 
     private void updateCursorPosition() {
         if (cursorView != null) {
-            cursorView.setX(cursorX - cursorView.getWidth()/2);
-            cursorView.setY(cursorY - cursorView.getHeight()/2);
+            cursorView.setX(cursorX - cursorView.getWidth() / 2);
+            cursorView.setY(cursorY - cursorView.getHeight() / 2);
         }
     }
 
     private void moveCursor(int dx, int dy) {
         cursorX += dx;
         cursorY += dy;
-        // Limites
         cursorX = Math.max(0, Math.min(screenWidth, cursorX));
         cursorY = Math.max(0, Math.min(screenHeight, cursorY));
         updateCursorPosition();
-        // Optionnel : faire un hover sur l'élément sous le curseur (simule souris)
         sendMouseHover(cursorX, cursorY);
+
+        // Gestion du défilement automatique si on frôle les bords
+        if (cursorY <= SCROLL_EDGE || cursorY >= screenHeight - SCROLL_EDGE) {
+            if (!isScrolling) {
+                isScrolling = true;
+                scrollHandler.post(scrollRunnable);
+            }
+        } else {
+            isScrolling = false;
+        }
     }
 
     private void sendMouseHover(int x, int y) {
-        // Envoie un événement de survol à la WebView (pour les effets CSS)
         long now = android.os.SystemClock.uptimeMillis();
         MotionEvent hoverEvent = MotionEvent.obtain(now, now, MotionEvent.ACTION_HOVER_MOVE, x, y, 0);
         webView.dispatchGenericMotionEvent(hoverEvent);
@@ -172,7 +217,6 @@ public class MainActivity extends Activity {
     }
 
     private void performClickAtCursor() {
-        // Envoie un clic à la position du curseur
         long now = android.os.SystemClock.uptimeMillis();
         MotionEvent downEvent = MotionEvent.obtain(now, now, MotionEvent.ACTION_DOWN, cursorX, cursorY, 0);
         webView.dispatchTouchEvent(downEvent);
@@ -240,7 +284,7 @@ public class MainActivity extends Activity {
         webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
         webView.setBackgroundColor(0xFF000000);
         webView.setScrollBarStyle(View.SCROLLBARS_INSIDE_OVERLAY);
-        webView.setFocusable(false); // Important : on ne veut pas de focus interne, le curseur gère tout
+        webView.setFocusable(false);
         webView.setFocusableInTouchMode(false);
 
         webView.setWebViewClient(new WebViewClient() {
@@ -278,7 +322,6 @@ public class MainActivity extends Activity {
                 super.onPageFinished(view, url);
                 progressBar.setVisibility(View.GONE);
                 injectAdBlocker(view);
-                // Réafficher le curseur après chargement
                 if (cursorView != null) cursorView.setVisibility(View.VISIBLE);
             }
 
@@ -337,7 +380,6 @@ public class MainActivity extends Activity {
                     customViewContainer.setVisibility(View.GONE);
                 } else {
                     setContentView(R.layout.activity_main);
-                    // Reconstitution des vues
                     webView = findViewById(R.id.webview);
                     progressBar = findViewById(R.id.progress_bar);
                     errorView = findViewById(R.id.error_view);
@@ -345,7 +387,7 @@ public class MainActivity extends Activity {
                     customViewContainer = findViewById(R.id.custom_view_container);
                     setupWebView();
                     webView.loadUrl(TARGET_URL);
-                    createCursor();
+                    createWhiteArrowCursor();
                     rootLayout.post(() -> {
                         screenWidth = rootLayout.getWidth();
                         screenHeight = rootLayout.getHeight();
@@ -385,7 +427,7 @@ public class MainActivity extends Activity {
                 "[class*=popup],[id*=popup],[class*=overlay]," +
                 "[class*=advert],[class*=banner],[class*=sponsor]," +
                 ".video-ad,.preroll,.interstitial{display:none!important;}" +
-                "*{cursor:none!important;}" + // on cache le curseur du système
+                "*{cursor:none!important;}" +
             "';" +
             "document.head.appendChild(s);" +
             "window.open=function(){return null;};" +
@@ -404,7 +446,6 @@ public class MainActivity extends Activity {
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
-        // Gestion écran d'erreur
         if (errorView != null && errorView.getVisibility() == View.VISIBLE &&
             (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER)) {
             hideError();
@@ -412,7 +453,6 @@ public class MainActivity extends Activity {
             return true;
         }
 
-        // En mode vidéo plein écran, on délègue au ChromeClient
         if (isVideoFullscreen) {
             switch (keyCode) {
                 case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
@@ -436,7 +476,6 @@ public class MainActivity extends Activity {
             return super.onKeyDown(keyCode, event);
         }
 
-        // Navigation curseur
         switch (keyCode) {
             case KeyEvent.KEYCODE_DPAD_UP:
                 moveCursor(0, -CURSOR_STEP);
@@ -491,6 +530,7 @@ public class MainActivity extends Activity {
     protected void onPause() {
         super.onPause();
         webView.onPause();
+        scrollHandler.removeCallbacks(scrollRunnable);
     }
 
     @Override
@@ -499,7 +539,6 @@ public class MainActivity extends Activity {
         webView.onResume();
         hideSystemUI();
         if (cursorView != null) cursorView.setVisibility(View.VISIBLE);
-        // Re-vérifier les dimensions
         rootLayout.post(() -> {
             screenWidth = rootLayout.getWidth();
             screenHeight = rootLayout.getHeight();
@@ -511,6 +550,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        scrollHandler.removeCallbacks(scrollRunnable);
         if (webView != null) {
             webView.stopLoading();
             webView.destroy();
