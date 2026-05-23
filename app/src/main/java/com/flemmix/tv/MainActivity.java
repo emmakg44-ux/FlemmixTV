@@ -2,11 +2,16 @@ package com.flemmix.tv;
 
 import android.app.Activity;
 import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.drawable.BitmapDrawable;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 import android.net.http.SslError;
 import android.os.Bundle;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.webkit.CookieManager;
@@ -18,6 +23,7 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 
@@ -31,14 +37,24 @@ public class MainActivity extends Activity {
     private WebView webView;
     private ProgressBar progressBar;
     private TextView errorView;
+    private FrameLayout rootLayout;
+    private ImageView cursorView;
     private FrameLayout customViewContainer;
     private View customView;
     private WebChromeClient.CustomViewCallback customViewCallback;
     private boolean isVideoFullscreen = false;
 
+    // Variables pour le curseur souris virtuel
+    private int cursorX = 0;
+    private int cursorY = 0;
+    private int screenWidth = 1920;  // valeurs par défaut, mises à jour au démarrage
+    private int screenHeight = 1080;
+    private boolean cursorVisible = true;
+    private static final int CURSOR_STEP = 20; // pixels par pression de touche
+
     private static final String TARGET_URL = "https://flemmix.win/";
 
-    // Liste des domaines publicitaires (bloqués)
+    // Blocage des pubs (même liste que précédemment)
     private static final Set<String> AD_DOMAINS = new HashSet<>(Arrays.asList(
         "googlesyndication.com", "doubleclick.net", "googleadservices.com",
         "google-analytics.com", "googletagmanager.com", "googletagservices.com",
@@ -76,16 +92,94 @@ public class MainActivity extends Activity {
         webView = findViewById(R.id.webview);
         progressBar = findViewById(R.id.progress_bar);
         errorView = findViewById(R.id.error_view);
-        customViewContainer = findViewById(R.id.custom_view_container); // à ajouter dans le layout
+        rootLayout = findViewById(R.id.root_layout);
+        customViewContainer = findViewById(R.id.custom_view_container);
+
+        // Création du curseur
+        createCursor();
 
         hideSystemUI();
         setupWebView();
+
+        // Récupérer les dimensions réelles de l'écran
+        rootLayout.post(() -> {
+            screenWidth = rootLayout.getWidth();
+            screenHeight = rootLayout.getHeight();
+            cursorX = screenWidth / 2;
+            cursorY = screenHeight / 2;
+            updateCursorPosition();
+        });
 
         if (isConnected()) {
             webView.loadUrl(TARGET_URL);
         } else {
             showError("Pas de connexion internet.\nVérifie ton réseau et appuie sur OK pour réessayer.");
         }
+    }
+
+    private void createCursor() {
+        // Créer une petite image bitmap pour le curseur (un cercle rouge avec contour blanc)
+        int size = 40;
+        Bitmap bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(bmp);
+        Paint paint = new Paint();
+        paint.setAntiAlias(true);
+        paint.setColor(Color.RED);
+        canvas.drawCircle(size/2, size/2, size/2 - 2, paint);
+        paint.setColor(Color.WHITE);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(2);
+        canvas.drawCircle(size/2, size/2, size/2 - 2, paint);
+        // petite croix au centre
+        paint.setColor(Color.WHITE);
+        paint.setStrokeWidth(2);
+        canvas.drawLine(size/2 - 6, size/2, size/2 + 6, size/2, paint);
+        canvas.drawLine(size/2, size/2 - 6, size/2, size/2 + 6, paint);
+
+        cursorView = new ImageView(this);
+        cursorView.setImageDrawable(new BitmapDrawable(getResources(), bmp));
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(size, size);
+        cursorView.setLayoutParams(params);
+        cursorView.setVisibility(View.VISIBLE);
+        rootLayout.addView(cursorView);
+        cursorView.bringToFront();
+    }
+
+    private void updateCursorPosition() {
+        if (cursorView != null) {
+            cursorView.setX(cursorX - cursorView.getWidth()/2);
+            cursorView.setY(cursorY - cursorView.getHeight()/2);
+        }
+    }
+
+    private void moveCursor(int dx, int dy) {
+        cursorX += dx;
+        cursorY += dy;
+        // Limites
+        cursorX = Math.max(0, Math.min(screenWidth, cursorX));
+        cursorY = Math.max(0, Math.min(screenHeight, cursorY));
+        updateCursorPosition();
+        // Optionnel : faire un hover sur l'élément sous le curseur (simule souris)
+        sendMouseHover(cursorX, cursorY);
+    }
+
+    private void sendMouseHover(int x, int y) {
+        // Envoie un événement de survol à la WebView (pour les effets CSS)
+        long now = android.os.SystemClock.uptimeMillis();
+        MotionEvent hoverEvent = MotionEvent.obtain(now, now, MotionEvent.ACTION_HOVER_MOVE, x, y, 0);
+        webView.dispatchGenericMotionEvent(hoverEvent);
+        hoverEvent.recycle();
+    }
+
+    private void performClickAtCursor() {
+        // Envoie un clic à la position du curseur
+        long now = android.os.SystemClock.uptimeMillis();
+        MotionEvent downEvent = MotionEvent.obtain(now, now, MotionEvent.ACTION_DOWN, cursorX, cursorY, 0);
+        webView.dispatchTouchEvent(downEvent);
+        downEvent.recycle();
+        MotionEvent upEvent = MotionEvent.obtain(now, now, MotionEvent.ACTION_UP, cursorX, cursorY, 0);
+        webView.dispatchTouchEvent(upEvent);
+        upEvent.recycle();
     }
 
     private boolean isConnected() {
@@ -99,11 +193,13 @@ public class MainActivity extends Activity {
         errorView.setVisibility(View.VISIBLE);
         webView.setVisibility(View.GONE);
         progressBar.setVisibility(View.GONE);
+        if (cursorView != null) cursorView.setVisibility(View.GONE);
     }
 
     private void hideError() {
         errorView.setVisibility(View.GONE);
         webView.setVisibility(View.VISIBLE);
+        if (cursorView != null) cursorView.setVisibility(View.VISIBLE);
     }
 
     private void hideSystemUI() {
@@ -144,12 +240,10 @@ public class MainActivity extends Activity {
         webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
         webView.setBackgroundColor(0xFF000000);
         webView.setScrollBarStyle(View.SCROLLBARS_INSIDE_OVERLAY);
-        webView.setFocusable(true);
-        webView.setFocusableInTouchMode(true);
-        webView.requestFocus();
+        webView.setFocusable(false); // Important : on ne veut pas de focus interne, le curseur gère tout
+        webView.setFocusableInTouchMode(false);
 
         webView.setWebViewClient(new WebViewClient() {
-
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest req) {
                 String url = req.getUrl().toString().toLowerCase();
@@ -183,9 +277,9 @@ public class MainActivity extends Activity {
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
                 progressBar.setVisibility(View.GONE);
-                injectStylesAndAdBlocker(view);
-                // Force le focus sur le WebView pour la télécommande
-                view.requestFocus();
+                injectAdBlocker(view);
+                // Réafficher le curseur après chargement
+                if (cursorView != null) cursorView.setVisibility(View.VISIBLE);
             }
 
             @Override
@@ -199,14 +293,14 @@ public class MainActivity extends Activity {
 
             @Override
             public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
-                handler.proceed(); // Accepte les certificats SSL (si site safe)
+                handler.proceed();
             }
 
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest req) {
                 String url = req.getUrl().toString();
                 if (!url.startsWith("http://") && !url.startsWith("https://")) {
-                    return true; // bloque les intents non web
+                    return true;
                 }
                 view.loadUrl(url);
                 return true;
@@ -214,20 +308,17 @@ public class MainActivity extends Activity {
         });
 
         webView.setWebChromeClient(new WebChromeClient() {
-
             @Override
             public void onShowCustomView(View view, CustomViewCallback callback) {
                 if (customView != null) {
                     callback.onCustomViewHidden();
                     return;
                 }
-
                 customView = view;
                 customViewCallback = callback;
                 isVideoFullscreen = true;
-
-                // Cache le WebView et affiche le conteneur plein écran
                 webView.setVisibility(View.GONE);
+                if (cursorView != null) cursorView.setVisibility(View.GONE);
                 if (customViewContainer != null) {
                     customViewContainer.setVisibility(View.VISIBLE);
                     customViewContainer.addView(customView);
@@ -240,32 +331,39 @@ public class MainActivity extends Activity {
             @Override
             public void onHideCustomView() {
                 if (customView == null) return;
-
                 isVideoFullscreen = false;
                 if (customViewContainer != null) {
                     customViewContainer.removeView(customView);
                     customViewContainer.setVisibility(View.GONE);
                 } else {
                     setContentView(R.layout.activity_main);
-                    // Re-récupérer les références
+                    // Reconstitution des vues
                     webView = findViewById(R.id.webview);
                     progressBar = findViewById(R.id.progress_bar);
                     errorView = findViewById(R.id.error_view);
+                    rootLayout = findViewById(R.id.root_layout);
                     customViewContainer = findViewById(R.id.custom_view_container);
-                    setupWebView(); // Reconfigure le WebView
+                    setupWebView();
                     webView.loadUrl(TARGET_URL);
+                    createCursor();
+                    rootLayout.post(() -> {
+                        screenWidth = rootLayout.getWidth();
+                        screenHeight = rootLayout.getHeight();
+                        cursorX = screenWidth / 2;
+                        cursorY = screenHeight / 2;
+                        updateCursorPosition();
+                    });
                 }
                 webView.setVisibility(View.VISIBLE);
+                if (cursorView != null) cursorView.setVisibility(View.VISIBLE);
                 customView = null;
                 customViewCallback.onCustomViewHidden();
                 hideSystemUI();
-                webView.requestFocus();
             }
 
             @Override
             public boolean onCreateWindow(WebView view, boolean isDialog,
                                           boolean isUserGesture, android.os.Message resultMsg) {
-                // Empêche l'ouverture de nouvelles fenêtres (popups)
                 return false;
             }
 
@@ -278,104 +376,35 @@ public class MainActivity extends Activity {
         });
     }
 
-    private void injectStylesAndAdBlocker(WebView view) {
-        // CSS + JS combiné pour masquer les pubs, améliorer le focus et empêcher les popups
+    private void injectAdBlocker(WebView view) {
         String js = "javascript:(function(){" +
-            // Supprime les popups résiduelles
-            "var killPopups=setInterval(function(){" +
-                "var divs=document.querySelectorAll('div[style*=\"fixed\"],div[style*=\"absolute\"]');" +
-                "for(var i=0;i<divs.length;i++){" +
-                    "var d=divs[i];" +
-                    "if((d.offsetWidth>200 || d.offsetHeight>100) && (d.style.zIndex>1000 || d.style.position==='fixed')){" +
-                        "if(!d.querySelector('video')) d.style.display='none';" +
-                    "}" +
-                "}" +
-            "},1000);" +
-
-            // Style CSS renforcé
             "var s=document.createElement('style');" +
             "s.innerHTML='" +
-                "body{background:#000!important;margin:0;padding:0;}" +
+                "body{background:#000!important;}" +
                 ".ads,.ad,.advertisement,.adsbygoogle," +
                 "[class*=popup],[id*=popup],[class*=overlay]," +
                 "[class*=advert],[class*=banner],[class*=sponsor]," +
-                ".video-ad,.preroll,.interstitial,.stick-ad," +
-                "[class*=googleAd],[id*=googleAd],ins.adsbygoogle{" +
-                "display:none!important;visibility:hidden!important;height:0!important;width:0!important;}" +
-
-                // Style de focus pour la télécommande
-                "a:focus,button:focus,input:focus,select:focus,textarea:focus,[tabindex]:focus,div[role=button]:focus{" +
-                    "outline:3px solid #E50914!important;" +
-                    "outline-offset:3px!important;" +
-                    "border-radius:4px!important;" +
-                    "box-shadow:0 0 0 3px rgba(229,9,20,0.4)!important;" +
-                "}" +
-                // Cache le curseur souris
-                "*{cursor:none!important;}" +
+                ".video-ad,.preroll,.interstitial{display:none!important;}" +
+                "*{cursor:none!important;}" + // on cache le curseur du système
             "';" +
             "document.head.appendChild(s);" +
-
-            // Bloque window.open et les redirections de popups
             "window.open=function(){return null;};" +
-            "var originalAlert=window.alert; window.alert=function(){};" +
-            "var originalConfirm=window.confirm; window.confirm=function(){return false;};" +
-
-            // Supprime les iframes suspectes (pubs)
-            "var iframes=document.querySelectorAll('iframe');" +
-            "for(var i=0;i<iframes.length;i++){" +
-                "var src=iframes[i].src.toLowerCase();" +
-                "if(src.indexOf('ads')!==-1 || src.indexOf('pop')!==-1 || src.indexOf('doubleclick')!==-1){" +
-                    "iframes[i].style.display='none';" +
-                    "iframes[i].remove();" +
-                "}" +
-            "}" +
-
-            // Nettoie les intervalles et timeouts potentiellement malicieux toutes les 5 secondes
             "setInterval(function(){" +
-                "var highestTimeoutId = setTimeout(function(){},0);" +
-                "for(var i=0;i<highestTimeoutId;i++){" +
-                    "clearTimeout(i); clearInterval(i);" +
-                "}" +
-            "},5000);" +
+                "document.querySelectorAll('*').forEach(function(el){" +
+                    "var st=window.getComputedStyle(el);" +
+                    "if((st.position==='fixed'||st.position==='absolute')" +
+                    "&&parseInt(st.zIndex)>1000" +
+                    "&&el.tagName!=='VIDEO'" +
+                    "&&el.offsetWidth>100){" +
+                        "el.style.display='none';}" +
+                "});},2000);" +
         "})()";
         view.loadUrl(js);
     }
 
-    // Navigation DPAD améliorée
-    private void navigateFocus(String direction) {
-        String js = "javascript:(function(){" +
-            "var focusable = Array.from(document.querySelectorAll('a, button, input, textarea, select, [tabindex]:not([tabindex=\"-1\"]), [role=\"button\"], video'));" +
-            "focusable = focusable.filter(el => el.offsetParent !== null && getComputedStyle(el).visibility !== 'hidden');" +
-            "if(focusable.length === 0) return;" +
-            "var active = document.activeElement;" +
-            "var index = focusable.indexOf(active);" +
-            "var newIndex = index;" +
-            "var step = 0;" +
-            "if('" + direction + "' === 'up') { step = -1; }" +
-            "else if('" + direction + "' === 'down') { step = 1; }" +
-            "else if('" + direction + "' === 'left') { step = -1; }" +
-            "else if('" + direction + "' === 'right') { step = 1; }" +
-            "else return;" +
-            "if (index !== -1) {" +
-                "newIndex = index + step;" +
-                "if(newIndex >= 0 && newIndex < focusable.length) {" +
-                    "focusable[newIndex].focus();" +
-                    "focusable[newIndex].scrollIntoView({block: 'center', behavior: 'smooth'});" +
-                    "return;" +
-                "}" +
-            "}" +
-            // Si aucun élément focusable adjacent, on scroll la page
-            "if('" + direction + "' === 'up') window.scrollBy(0, -200);" +
-            "else if('" + direction + "' === 'down') window.scrollBy(0, 200);" +
-            "else if('" + direction + "' === 'left') window.scrollBy(-200, 0);" +
-            "else if('" + direction + "' === 'right') window.scrollBy(200, 0);" +
-        "})()";
-        webView.evaluateJavascript(js, null);
-    }
-
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
-        // Gestion de l'écran d'erreur : OK recharge
+        // Gestion écran d'erreur
         if (errorView != null && errorView.getVisibility() == View.VISIBLE &&
             (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER)) {
             hideError();
@@ -383,14 +412,13 @@ public class MainActivity extends Activity {
             return true;
         }
 
-        // Gestion des touches média même en vidéo plein écran
+        // En mode vidéo plein écran, on délègue au ChromeClient
         if (isVideoFullscreen) {
             switch (keyCode) {
                 case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
                 case KeyEvent.KEYCODE_MEDIA_PLAY:
                 case KeyEvent.KEYCODE_MEDIA_PAUSE:
-                    webView.evaluateJavascript(
-                        "var v=document.querySelector('video');if(v){if(v.paused)v.play();else v.pause();}", null);
+                    webView.evaluateJavascript("var v=document.querySelector('video');if(v){if(v.paused)v.play();else v.pause();}", null);
                     return true;
                 case KeyEvent.KEYCODE_MEDIA_FAST_FORWARD:
                     webView.evaluateJavascript("var v=document.querySelector('video');if(v)v.currentTime+=10;", null);
@@ -408,53 +436,41 @@ public class MainActivity extends Activity {
             return super.onKeyDown(keyCode, event);
         }
 
-        // Navigation standard sur la WebView
+        // Navigation curseur
         switch (keyCode) {
-            case KeyEvent.KEYCODE_BACK:
-            case KeyEvent.KEYCODE_ESCAPE:
-                if (webView.canGoBack()) {
-                    webView.goBack();
-                    return true;
-                }
-                break;
-
+            case KeyEvent.KEYCODE_DPAD_UP:
+                moveCursor(0, -CURSOR_STEP);
+                return true;
+            case KeyEvent.KEYCODE_DPAD_DOWN:
+                moveCursor(0, CURSOR_STEP);
+                return true;
+            case KeyEvent.KEYCODE_DPAD_LEFT:
+                moveCursor(-CURSOR_STEP, 0);
+                return true;
+            case KeyEvent.KEYCODE_DPAD_RIGHT:
+                moveCursor(CURSOR_STEP, 0);
+                return true;
             case KeyEvent.KEYCODE_DPAD_CENTER:
             case KeyEvent.KEYCODE_ENTER:
-                webView.evaluateJavascript(
-                    "var el = document.activeElement; if(el && (el.click || (el.tagName === 'A'))) { if(el.click) el.click(); else if(el.href) window.location=el.href; }", null);
+                performClickAtCursor();
                 return true;
-
-            case KeyEvent.KEYCODE_DPAD_UP:
-                navigateFocus("up");
+            case KeyEvent.KEYCODE_BACK:
+                if (webView.canGoBack()) {
+                    webView.goBack();
+                } else {
+                    finish();
+                }
                 return true;
-
-            case KeyEvent.KEYCODE_DPAD_DOWN:
-                navigateFocus("down");
-                return true;
-
-            case KeyEvent.KEYCODE_DPAD_LEFT:
-                navigateFocus("left");
-                return true;
-
-            case KeyEvent.KEYCODE_DPAD_RIGHT:
-                navigateFocus("right");
-                return true;
-
             case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
             case KeyEvent.KEYCODE_MEDIA_PLAY:
             case KeyEvent.KEYCODE_MEDIA_PAUSE:
-                webView.evaluateJavascript(
-                    "var v=document.querySelector('video');if(v){if(v.paused)v.play();else v.pause();}", null);
+                webView.evaluateJavascript("var v=document.querySelector('video');if(v){if(v.paused)v.play();else v.pause();}", null);
                 return true;
-
             case KeyEvent.KEYCODE_MEDIA_FAST_FORWARD:
-                webView.evaluateJavascript(
-                    "var v=document.querySelector('video');if(v)v.currentTime+=10;", null);
+                webView.evaluateJavascript("var v=document.querySelector('video');if(v)v.currentTime+=10;", null);
                 return true;
-
             case KeyEvent.KEYCODE_MEDIA_REWIND:
-                webView.evaluateJavascript(
-                    "var v=document.querySelector('video');if(v)v.currentTime-=10;", null);
+                webView.evaluateJavascript("var v=document.querySelector('video');if(v)v.currentTime-=10;", null);
                 return true;
         }
         return super.onKeyDown(keyCode, event);
@@ -482,7 +498,15 @@ public class MainActivity extends Activity {
         super.onResume();
         webView.onResume();
         hideSystemUI();
-        webView.requestFocus();
+        if (cursorView != null) cursorView.setVisibility(View.VISIBLE);
+        // Re-vérifier les dimensions
+        rootLayout.post(() -> {
+            screenWidth = rootLayout.getWidth();
+            screenHeight = rootLayout.getHeight();
+            cursorX = Math.min(cursorX, screenWidth);
+            cursorY = Math.min(cursorY, screenHeight);
+            updateCursorPosition();
+        });
     }
 
     @Override
